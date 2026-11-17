@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from io import TextIOBase
 from abc import ABCMeta, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Optional
 
@@ -101,10 +102,13 @@ class SafetyFormatter(FormatterAPI):
         from safety.formatters.json import JsonReport
         from safety.formatters.bare import BareReport
         from safety.formatters.html import HTMLReport
+        from safety.formatters.cyclonedx import CycloneDxReport
 
         self.format = ScreenReport(**kwargs)
 
-        if output == "json":
+        if output in ("cyclonedx", "cyclonedx-json", "cyclonedx@1.5"):
+            self.format = CycloneDxReport(**kwargs)
+        elif output == "json":
             self.format = JsonReport(**kwargs)
         elif output == "html":
             self.format = HTMLReport(**kwargs)
@@ -142,6 +146,59 @@ class SafetyFormatter(FormatterAPI):
         return self.format.render_vulnerabilities(
             announcements, vulnerabilities, remediations, full, packages, fixes
         )
+
+    def write_vulnerabilities(
+        self,
+        stream: TextIOBase,
+        announcements: List[Dict[str, Any]],
+        vulnerabilities: list[Vulnerability],
+        remediations: Dict[str, Any],
+        full: bool,
+        packages: List[Dict[str, Any]],
+        fixes: Tuple = (),
+    ) -> None:
+        """
+        Stream vulnerabilities to an output stream when the formatter supports it.
+
+        Non-streaming formatters retain their existing implementation and write
+        their rendered report to the stream in one call.
+
+        Args:
+            stream (TextIOBase): Destination stream.
+            announcements (List[Dict[str, Any]]): List of announcements.
+            vulnerabilities (list[Vulnerability]): List of vulnerabilities.
+            remediations (Dict[str, Any]): Dictionary of remediations.
+            full (bool): Whether to render a full report.
+            packages (List[Dict[str, Any]]): List of packages.
+            fixes (Tuple, optional): Tuple of fixes. Defaults to ().
+        """
+        write_report = getattr(self.format, "write_vulnerabilities", None)
+        if callable(write_report):
+            LOG.info(
+                "Safety is going to stream vulnerabilities with format: %s",
+                self.format,
+            )
+            write_report(
+                stream,
+                announcements,
+                vulnerabilities,
+                remediations,
+                full,
+                packages,
+                fixes,
+            )
+            return
+
+        report = self.render_vulnerabilities(
+            announcements,
+            vulnerabilities,
+            remediations,
+            full,
+            packages,
+            fixes,
+        )
+        if report is not None:
+            stream.write(report)
 
     def render_licenses(
         self, announcements: List[Dict[str, Any]], licenses: List[Dict[str, Any]]

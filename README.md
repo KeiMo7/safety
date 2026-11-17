@@ -75,6 +75,26 @@ Leveraging the industry's most comprehensive database of vulnerabilities and mal
 - `safety system-scan`: Discover supply-chain assets on your development machine — AI assistants (e.g. Claude Code, Claude Desktop), dependencies, runtimes, environments, and developer tools. Available as part of the Safety commercial product — see [https://getsafety.com/](https://getsafety.com/).
 - `safety scan --apply-fixes`: Update vulnerable dependencies.
 
+### CycloneDX 1.5 output
+
+`safety check` can emit a CycloneDX 1.5 JSON BOM without changing the default
+human-readable output:
+
+```console
+safety check --output cyclonedx > safety-report.cdx.json
+```
+
+Use `--save-cyclonedx` to write atomically to an artifact path:
+
+```console
+safety check --save-cyclonedx artifacts/safety-report.cdx.json
+```
+
+Component identity is deduplicated by `(name, version, purl)`, package-name
+case and namespace are preserved, and missing metadata is retained as
+`unknown` with counters. See [CycloneDX output](docs/cyclonedx-output.md) for
+behavior, failure handling, concurrency, and migration details.
+
 # Service-Level Agreement (SLA)
 
 We are committed to maintaining a high level of responsiveness and transparency in managing issues reported in our codebases. This SLA outlines our policies and procedures for handling issues to ensure timely resolutions and effective communication with our community.

@@ -176,6 +176,39 @@ class InvalidRequirementError(SafetyError):
         return EXIT_CODE_INVALID_REQUIREMENT
 
 
+class CycloneDxOutputError(SafetyError):
+    """
+    Error raised when a CycloneDX report cannot be generated.
+
+    Messages intentionally avoid component values, file paths, and credentials
+    because this error may be logged by the CLI exception handler.
+    """
+
+    def __init__(
+        self,
+        message: str = "Unable to generate the CycloneDX report.",
+    ):
+        self.message = message
+        super().__init__(self.message)
+
+
+class CycloneDxComponentError(CycloneDxOutputError):
+    """
+    Error raised when a specific CycloneDX component cannot be serialized.
+
+    Args:
+        index (int): Zero-based component position.
+        field (str): Invalid schema field name.
+    """
+
+    def __init__(self, index: int, field: str):
+        self.index = index
+        self.field = field
+        super().__init__(
+            f"CycloneDX component[{index}] failed validation for field: {field}."
+        )
+
+
 class DatabaseFileNotFoundError(DatabaseFetchError):
     """
     Error raised when the vulnerability database file is not found.

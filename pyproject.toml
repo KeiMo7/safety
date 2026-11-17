@@ -74,6 +74,10 @@ gitlab = [
 spdx = [
   "spdx-tools>=0.8.2"
 ]
+test = [
+  "jsonschema>=4.0",
+  "pytest>=8.0",
+]
 
 [project.scripts]
 safety = "safety.cli:cli"
@@ -119,6 +123,7 @@ path = ".venv"
 
 dependencies = [
   "coverage[toml]>=6.0",
+  "jsonschema>=4.0",
   "pytest==8.3.4",
   "commitizen",
   "tomli"

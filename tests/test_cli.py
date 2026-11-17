@@ -253,6 +253,72 @@ class TestSafetyCLI(unittest.TestCase):
             self.assertEqual(result.exit_code, EXPECTED_EXIT_CODE_VULNS_NOT_FOUND)
 
     @patch("safety.safety.check")
+    def test_check_cyclonedx_output_is_streamed_json(self, check_func):
+        vulnerability = get_vulnerability()
+        check_func.return_value = [vulnerability], None
+
+        with (
+            patch("safety.safety.get_packages", return_value=[vulnerability.pkg]),
+            patch("safety.safety.get_announcements", return_value=[]),
+            patch("safety.safety.add_local_notifications", return_value=[]),
+        ):
+            result = self.runner.invoke(
+                self.cli,
+                ["check", "--output", "cyclonedx"],
+            )
+
+        self.assertEqual(result.exit_code, 64)
+        self.assertNotIn("DEPRECATED", result.stdout)
+        payload = json.loads(result.stdout)
+        self.assertEqual("CycloneDX", payload["bomFormat"])
+        self.assertEqual("1.5", payload["specVersion"])
+        self.assertEqual("django", payload["components"][0]["name"])
+
+    @patch("safety.safety.check")
+    def test_check_cyclonedx_flag_writes_save_path(self, check_func):
+        vulnerability = get_vulnerability()
+        check_func.return_value = [vulnerability], None
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            output_path = Path(tempdir) / "bom.cdx.json"
+            with (
+                patch(
+                    "safety.safety.get_packages",
+                    return_value=[vulnerability.pkg],
+                ),
+                patch("safety.safety.get_announcements", return_value=[]),
+                patch("safety.safety.add_local_notifications", return_value=[]),
+            ):
+                result = self.runner.invoke(
+                    self.cli,
+                    [
+                        "check",
+                        "--cyclonedx",
+                        "--save-cyclonedx",
+                        str(output_path),
+                    ],
+                )
+
+            self.assertEqual(result.exit_code, 64)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual("CycloneDX", payload["bomFormat"])
+
+    @patch("safety.safety.check")
+    def test_check_cyclonedx_disabled_keeps_default_output(self, check_func):
+        check_func.return_value = [], None
+
+        with (
+            patch("safety.safety.get_packages", return_value=[]),
+            patch("safety.safety.get_announcements", return_value=[]),
+            patch("safety.safety.add_local_notifications", return_value=[]),
+        ):
+            result = self.runner.invoke(self.cli, ["check"])
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertNotIn("bomFormat", result.stdout)
+        self.assertIn("DEPRECATED", result.output)
+
+    @patch("safety.safety.check")
     def test_check_continue_on_error(self, check_func):
         EXPECTED_EXIT_CODE_CONTINUE_ON_ERROR = 0
 

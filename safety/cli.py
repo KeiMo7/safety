@@ -8,6 +8,7 @@ import logging
 import os
 import platform
 import sys
+import tempfile
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from enum import Enum
@@ -46,7 +47,12 @@ from safety.constants import (
     DEFAULT_EPILOG,
 )
 from safety.error_handlers import handle_cmd_exception, output_exception
-from safety.errors import InvalidCredentialError, SafetyError, SafetyException
+from safety.errors import (
+    CycloneDxOutputError,
+    InvalidCredentialError,
+    SafetyError,
+    SafetyException,
+)
 from safety.firewall.command import firewall_app
 from safety.formatter import SafetyFormatter
 from safety.init.command import init_app
@@ -222,6 +228,18 @@ def clean_check_command(f):
         kwargs.pop("proxy_protocol", None)
         kwargs.pop("proxy_host", None)
         kwargs.pop("proxy_port", None)
+
+        if output in ("cyclonedx-json", "cyclonedx@1.5"):
+            kwargs["output"] = "cyclonedx"
+            output = "cyclonedx"
+
+        if kwargs.get("cyclonedx_output"):
+            if output not in ("screen", "cyclonedx"):
+                raise click.UsageError(
+                    "Illegal usage: `--cyclonedx` cannot be combined with another output format."
+                )
+            kwargs["output"] = "cyclonedx"
+            output = "cyclonedx"
 
         if ctx.get_parameter_source(
             "json_version"
@@ -401,7 +419,16 @@ def print_deprecation_message(
     cls=MutuallyExclusiveOption,
     mutually_exclusive=["output", "bare"],
     with_values={
-        "output": ["screen", "text", "bare", "json", "html"],
+        "output": [
+            "screen",
+            "text",
+            "bare",
+            "json",
+            "html",
+            "cyclonedx",
+            "cyclonedx-json",
+            "cyclonedx@1.5",
+        ],
         "bare": [True, False],
     },
     callback=json_alias,
@@ -415,7 +442,16 @@ def print_deprecation_message(
     cls=MutuallyExclusiveOption,
     mutually_exclusive=["output", "bare"],
     with_values={
-        "output": ["screen", "text", "bare", "json", "html"],
+        "output": [
+            "screen",
+            "text",
+            "bare",
+            "json",
+            "html",
+            "cyclonedx",
+            "cyclonedx-json",
+            "cyclonedx@1.5",
+        ],
         "bare": [True, False],
     },
     callback=html_alias,
@@ -428,7 +464,18 @@ def print_deprecation_message(
     default=False,
     cls=MutuallyExclusiveOption,
     mutually_exclusive=["output", "json"],
-    with_values={"output": ["screen", "text", "bare", "json"], "json": [True, False]},
+    with_values={
+        "output": [
+            "screen",
+            "text",
+            "bare",
+            "json",
+            "cyclonedx",
+            "cyclonedx-json",
+            "cyclonedx@1.5",
+        ],
+        "json": [True, False],
+    },
     callback=bare_alias,
     hidden=True,
     is_flag=True,
@@ -437,10 +484,36 @@ def print_deprecation_message(
 @click.option(
     "--output",
     "-o",
-    type=click.Choice(["screen", "text", "json", "bare", "html"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "screen",
+            "text",
+            "json",
+            "bare",
+            "html",
+            "cyclonedx",
+            "cyclonedx-json",
+            "cyclonedx@1.5",
+        ],
+        case_sensitive=False,
+    ),
     default="screen",
     callback=active_color_if_needed,
     envvar="SAFETY_OUTPUT",
+)
+@click.option(
+    "--cyclonedx",
+    "cyclonedx_output",
+    default=False,
+    is_flag=True,
+    help="Output a CycloneDX 1.5 JSON BOM. Equivalent to --output cyclonedx.",
+)
+@click.option(
+    "--save-cyclonedx",
+    default="",
+    help="Path to where the CycloneDX 1.5 JSON BOM will be placed; if the path"
+    " is a directory, Safety will use safety-report-cyclonedx.json as filename."
+    " Default: empty",
 )
 @click.option(
     "--exit-code/--continue-on-error",
@@ -532,6 +605,8 @@ def check(
     json,
     html,
     bare,
+    cyclonedx_output,
+    save_cyclonedx,
     exit_code,
     policy_file,
     audit_and_monitor,
@@ -552,14 +627,15 @@ def check(
         not sys.stdout.isatty()
         and os.environ.get("SAFETY_OS_DESCRIPTION", None) != "run"
     )
-    silent_outputs = ["json", "bare", "html"]
+    silent_outputs = ["json", "bare", "html", "cyclonedx"]
     is_silent_output = output in silent_outputs
     prompt_mode = (
         bool(not non_interactive and not stdin and not is_silent_output)
         and not no_prompt
     )
     kwargs = {"version": json_version} if output == "json" else {}
-    print_deprecation_message("check", date(2024, 6, 1), new_command="scan")
+    if output != "cyclonedx":
+        print_deprecation_message("check", date(2024, 6, 1), new_command="scan")
     # try:
     packages = safety_core.get_packages(files, stdin)
 
@@ -640,9 +716,11 @@ def check(
             prompt=False,
         )
 
-    output_report = SafetyFormatter(output, **kwargs).render_vulnerabilities(
-        announcements, vulns, remediations, full_report, packages, fixes
-    )
+    output_report = None
+    if output != "cyclonedx":
+        output_report = SafetyFormatter(output, **kwargs).render_vulnerabilities(
+            announcements, vulns, remediations, full_report, packages, fixes
+        )
 
     # Announcements are send to stderr if not terminal, it doesn't depend on "exit_code" value
     stderr_announcements = filter_announcements(
@@ -662,7 +740,62 @@ def check(
     LOG.info("Vulnerabilities found (Not ignored): %s", len(found_vulns))
     LOG.info("All vulnerabilities found (ignored and Not ignored): %s", len(vulns))
 
-    click.secho(output_report, nl=should_add_nl(output, found_vulns), file=sys.stdout)
+    if output == "cyclonedx":
+        SafetyFormatter(output="cyclonedx").write_vulnerabilities(
+            sys.stdout,
+            announcements,
+            vulns,
+            remediations,
+            full_report,
+            packages,
+            fixes,
+        )
+    else:
+        click.secho(
+            output_report, nl=should_add_nl(output, found_vulns), file=sys.stdout
+        )
+
+    if save_cyclonedx:
+        save_at = save_cyclonedx
+        if os.path.isdir(save_at):
+            save_at = os.path.join(save_at, "safety-report-cyclonedx.json")
+
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="\n",
+                dir=os.path.dirname(save_at) or ".",
+                prefix=".safety-cyclonedx-",
+                delete=False,
+            ) as report_file:
+                temporary_path = report_file.name
+                SafetyFormatter(output="cyclonedx").write_vulnerabilities(
+                    report_file,
+                    announcements,
+                    vulns,
+                    remediations,
+                    full_report,
+                    packages,
+                    fixes,
+                )
+            os.replace(temporary_path, save_at)
+        except CycloneDxOutputError:
+            if temporary_path and os.path.exists(temporary_path):
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
+            raise
+        except OSError:
+            if temporary_path and os.path.exists(temporary_path):
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
+            LOG.error("CycloneDX report file could not be written")
+            raise CycloneDxOutputError() from None
 
     post_processing_report = save_json or audit_and_monitor or apply_remediations
 
@@ -701,7 +834,8 @@ def check(
         )
 
         safety_core.save_report(save_html, "safety-report.html", html_report)
-    print_deprecation_message("check", date(2024, 6, 1), new_command="scan")
+    if output != "cyclonedx":
+        print_deprecation_message("check", date(2024, 6, 1), new_command="scan")
     if exit_code and found_vulns:
         LOG.info("Exiting with default code for vulnerabilities found")
         sys.exit(EXIT_CODE_VULNERABILITIES_FOUND)
